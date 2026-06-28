@@ -7,6 +7,7 @@ def startup():
     # welcome line
     print("")
     print("🪽  Instance 1 ALIVE")
+    print("")
 
 
     # show dir
@@ -26,4 +27,8 @@ def startup():
         for path in devices:
             print(f" - {path}")
 
+
+    # command hints
+    print("")
+    print(" Type 'launch' or 'start' to start the server or 'exit' to quit")
     

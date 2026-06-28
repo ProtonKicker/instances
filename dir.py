@@ -1,5 +1,6 @@
 from pathlib import Path
 
+
 def startup():
 
     if not detect_dir():
