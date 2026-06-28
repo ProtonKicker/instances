@@ -2,27 +2,59 @@ import startup
 import process
 
 
+# def main():
+#     startup.startup()
+#
+#     # while user didnt input "exit" , keep input active
+#     while input() != "exit":
+#
+#         # check server status
+#         if not process.get_state():
+#             print("Server is inactive")
+#
+#             #start klipper
+#             if input() in ["launch", "start"]:
+#                 process.start_klipper()
+#                 print("Klipper active")
+#
+#         if process.get_state():
+#
+#             # if user input "kill" or "stop", kill klipper
+#             if input() in ["kill", "stop"]:
+#                 process.kill_klipper()
+#                 print("Klipper down")
+
 def main():
     startup.startup()
 
-    # while user didnt input "exit" , keep input active
-    while input() != "exit":
+    while True:
+        # Capture the user input ONCE at the top of the loop
+        user_choice = input("👉 ").strip().lower()
 
-        # check server status
+        if user_choice == "exit":
+            print("Goodbye!")
+            break
+
+        # Check server status
         if not process.get_state():
-            print("Server is inactive")
-
-            #start klipper
-            if input() in ["launch", "start"]:
+            if user_choice in ["launch", "start"]:
                 process.start_klipper()
-                print("Klipper active")
-        
-        if process.get_state():
 
-            # if user input "kill" or "stop", kill klipper
-            if input() in ["kill", "stop"]:
+                # confirm start
+                if process.get_state():
+                    print("Klipper active")
+                else:
+                    print("Klipper failed to start")
+
+        else:
+            if user_choice in ["kill", "stop"]:
                 process.kill_klipper()
-                print("Klipper down")
+
+                # confirm shutdown
+                if not process.get_state():
+                    print("Klipper down")
+                else:
+                    print("Klipper failed to stop")
 
 
 
