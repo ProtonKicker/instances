@@ -1,11 +1,18 @@
 # main function
 
 # imports
-import startup
-
+import detect
 
 def main():
-    startup.start()
+    start()
+
+
+def start():
+    
+    print("Instance 1 ALIVE")
+
+    # call detect
+    detect.scan()
 
 
 # tells Python to execute the main() function when this file is run
