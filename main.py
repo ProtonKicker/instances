@@ -9,10 +9,21 @@ def main():
 
 def start():
     
-    print("Instance 1 ALIVE")
+
+    print("🪽  Instance 1 ALIVE")
+
 
     # call detect
-    detect.scan()
+    devices = detect.scan()
+    
+    # if devices is empty, say no devices
+    # if devices is not empty, list devices
+    if len(devices) == 0:
+        print("⚠️  No devices found")
+    else:
+        print("✅  Devices found:")
+        for d in devices:
+            print(f" - {d}")
 
 
 # tells Python to execute the main() function when this file is run
