@@ -8,8 +8,17 @@ def scan():
 
     # list out devices and say devices as array
     for port, desc, hwid in sorted(ports):
+
+        # debug line
+        # print(f"DEBUG: System raw comports found -> {[p.device for p in ports]}")
+        
+        # turn all upper case
         desc_upper = desc.upper()
-        if "USB" in desc_upper or "CH340" in desc_upper or "FTDI" in desc_upper or "CP210" in desc_upper or "ACM" in desc_upper:
+        port_upper = port.upper()
+
+
+        if any(x in desc_upper for x in ["USB", "CH340", "FTDI", "CP210", "ACM", "STM", "STMICRO", "KLIPPER"]) or \
+           any(x in port_upper for x in ["ACM", "USB"]):
             devices.append(port)
     
     return devices

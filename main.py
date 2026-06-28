@@ -22,8 +22,10 @@ def start():
         print("⚠️  No devices found")
     else:
         print("✅  Devices found:")
-        for d in devices:
-            print(f" - {d}")
+        #for d in devices:
+        #    print(f" - {d}")
+        for i in range(len(devices)):
+            print(f" {i+1} - {devices[i]}")
 
 
 # tells Python to execute the main() function when this file is run
