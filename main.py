@@ -21,11 +21,9 @@ def start():
     if len(devices) == 0:
         print("⚠️  No devices found")
     else:
-        print("✅  Devices found:")
-        #for d in devices:
-        #    print(f" - {d}")
-        for i in range(len(devices)):
-            print(f" {i+1} - {devices[i]}")
+        print("✅  Devices found (by ID):")
+        for index, path in enumerate(devices):
+            print(f" {index + 1} - {path}")
 
 
 # tells Python to execute the main() function when this file is run
