@@ -13,6 +13,7 @@ def startup():
     # show dir
     data_dir = dir.startup()
     print("🏛️  Data directory: ", data_dir)
+    print("")
 
 
     # list devices
@@ -26,6 +27,14 @@ def startup():
         print("✅ Devices found (by ID):")
         for path in devices:
             print(f" - {path}")
+    print("")
+
+    # check for printer.cfg
+    if detect.check_config(data_dir):
+        print("✅ Config found: printer.cfg")
+    else:
+        print("⚠️  No printer.cfg found")
+        print("   Place your printer.cfg in:", data_dir)
 
 
     # command hints

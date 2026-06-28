@@ -1,4 +1,5 @@
 import glob
+import os
 
 def scan():
 
@@ -7,3 +8,6 @@ def scan():
 
     return devices
         
+def check_config(data_dir):
+    config_file = os.path.join(data_dir, "printer.cfg")
+    return os.path.isfile(config_file)
