@@ -15,14 +15,10 @@ https://github.com/Klipper3d/klipper/releases/tag/v0.13.0
 
 startup screen:
 
-1. welcom
+1. welcome
 2. data directory
 3. list devices
-4. launch
-
-structure:
-welcome screen 
-a. dir    b. device    c. server
+4. some commands availible: a. dir    b. device    c. server
 
 ###### dir
 default dir = documents/instance1
