@@ -1,51 +1,80 @@
 import subprocess
 import os
+import sys
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = Path(__file__).parent
+
 _running = {}
 
 
-def _python():
-    venv = os.path.join(BASE_DIR, ".venv", "bin", "python")
-    return venv if os.path.isfile(venv) else "python3"
+def _get_python_exe():
+    venv_python = BASE_DIR / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
 
 
 def start(farm, inst):
-    if inst.id in _running:
+    if is_running(inst.id):
         return False
 
+    inst_dir = farm._instance_dir(inst.id)
+    printer_cfg = inst_dir / "printer.cfg"
+
+    if not printer_cfg.exists():
+        print(f"No printer.cfg for Instance {inst.id}")
+        return False
+
+    moonraker_conf = inst_dir / "moonraker.conf"
+
+    mr_config = inst_dir / "moonraker_data" / "config"
+    mr_config.mkdir(parents=True, exist_ok=True)
+    config_link = mr_config / "printer.cfg"
+    if config_link.exists() or config_link.is_symlink():
+        config_link.unlink()
+    config_link.symlink_to(printer_cfg)
+
+    uds_dir = Path("/tmp/instances")
+    uds_dir.mkdir(parents=True, exist_ok=True)
+    uds_path = f"/tmp/instances/instance_{inst.id}.sock"
+
+    klipper_py = BASE_DIR / "klipper_core" / "klippy" / "klippy.py"
+    klipper_cwd = BASE_DIR / "klipper_core" / "klippy"
+
+    klipper = subprocess.Popen(
+        [_get_python_exe(), str(klipper_py), "-a", uds_path, str(printer_cfg)],
+        cwd=str(klipper_cwd),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    moonraker_py = BASE_DIR / "moonraker_core" / "moonraker" / "moonraker.py"
+    moonraker_cwd = BASE_DIR / "moonraker_core"
+    moonraker_data = inst_dir / "moonraker_data"
+
+    moonraker = subprocess.Popen(
+        [_get_python_exe(), str(moonraker_py), "-c", str(moonraker_conf), "-d", str(moonraker_data)],
+        cwd=str(moonraker_cwd),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    mainsail_dir = inst_dir / "mainsail"
     p = farm.ports(inst.id)
-    klipper_py = os.path.join(BASE_DIR, "klipper_core", "klippy", "klippy.py")
-    klipper_cwd = os.path.join(BASE_DIR, "klipper_core", "klippy")
-    moonraker_py = os.path.join(BASE_DIR, "moonraker_core", "moonraker", "moonraker.py")
-    moonraker_cwd = os.path.join(BASE_DIR, "moonraker_core")
-    py = _python()
 
-    printer_cfg = str(farm.printer_cfg(inst.id))
-    moonraker_conf = str(farm.moonraker_conf(inst.id))
-    moonraker_data = str(farm.moonraker_data(inst.id))
-    mainsail_dir = str(farm.mainsail_dir(inst.id))
+    mainsail = subprocess.Popen(
+        [_get_python_exe(), "-m", "http.server", str(p["mainsail"]), "--directory", str(mainsail_dir)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
-    config_link = os.path.join(moonraker_data, "config", "printer.cfg")
-    os.makedirs(os.path.dirname(config_link), exist_ok=True)
-    if not os.path.islink(config_link) or os.path.realpath(config_link) != os.path.realpath(printer_cfg):
-        if os.path.lexists(config_link):
-            os.remove(config_link)
-        os.symlink(printer_cfg, config_link)
+    _running[inst.id] = {
+        "klipper": klipper,
+        "moonraker": moonraker,
+        "mainsail": mainsail,
+    }
 
-    kproc = subprocess.Popen(
-        [py, klipper_py, "-a", p["uds"], printer_cfg],
-        cwd=klipper_cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    mproc = subprocess.Popen(
-        [py, moonraker_py, "-c", moonraker_conf, "-d", moonraker_data],
-        cwd=moonraker_cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    wproc = subprocess.Popen(
-        [py, "-m", "http.server", str(p["mainsail"]), "--directory", mainsail_dir],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    _running[inst.id] = {"klipper": kproc, "moonraker": mproc, "mainsail": wproc}
     return True
 
 
@@ -53,40 +82,39 @@ def stop(instance_id):
     procs = _running.pop(instance_id, None)
     if not procs:
         return False
-    for key in ("mainsail", "moonraker", "klipper"):
-        p = procs.get(key)
-        if p and p.poll() is None:
-            p.terminate()
+
+    for name in ("moonraker", "klipper", "mainsail"):
+        proc = procs.get(name)
+        if proc and proc.poll() is None:
+            proc.terminate()
+
     return True
 
 
 def stop_all():
-    for pid in list(_running):
-        stop(pid)
+    for inst_id in list(_running.keys()):
+        stop(inst_id)
 
 
 def is_running(instance_id):
     procs = _running.get(instance_id)
     if not procs:
         return False
-    k = procs.get("klipper")
-    return k is not None and k.poll() is None
+    return any(proc.poll() is None for proc in procs.values())
 
 
 def running_count():
-    return len(_running)
+    return sum(1 for i in list(_running.keys()) if is_running(i))
 
 
 def status(farm):
-    rows = []
+    result = []
     for inst in farm.instances:
-        if inst.id in _running:
-            k = _running[inst.id]["klipper"]
-            state = "running" if k and k.poll() is None else "error"
+        if is_running(inst.id):
+            result.append((inst, "running"))
         else:
-            state = "stopped"
-        rows.append((inst, state))
-    return rows
+            result.append((inst, "stopped"))
+    return result
 
 
 def check_serial_access(device_path):

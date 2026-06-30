@@ -1,11 +1,9 @@
 import json
-import os
 import shutil
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-
-APP_DIR = Path(__file__).parent
 
 
 @dataclass
@@ -39,81 +37,47 @@ class Farm:
             "instances": [asdict(i) for i in self.instances],
         }, indent=2))
 
-    @staticmethod
-    def default_label(instance_id):
-        row = (instance_id - 1) // 26
-        col = (instance_id - 1) % 26 + 1
-        return f"{chr(ord('a') + row)}{col}"
+    def _get(self, instance_id):
+        for inst in self.instances:
+            if inst.id == instance_id:
+                return inst
+        raise KeyError(instance_id)
 
-    def ports(self, instance_id):
-        return {
-            "moonraker": 37124 + instance_id,
-            "mainsail": 8080 + instance_id,
-            "uds": f"/tmp/instance_{instance_id}.sock",
-        }
+    def _instance_dir(self, instance_id):
+        return self.data_dir / f"instance{instance_id}"
 
-    def instance_dir(self, instance_id):
-        return self.data_dir / "instances" / str(instance_id)
-
-    def printer_cfg(self, instance_id):
-        return self.instance_dir(instance_id) / "printer.cfg"
-
-    def moonraker_conf(self, instance_id):
-        return self.instance_dir(instance_id) / "moonraker.conf"
-
-    def moonraker_data(self, instance_id):
-        return self.instance_dir(instance_id) / "moonraker_data"
-
-    def mainsail_dir(self, instance_id):
-        return self.instance_dir(instance_id) / "mainsail"
-
-    def create(self, name="", label=None, serial="", template_path=""):
+    def create(self, label, serial="", template_path=""):
         inst = Instance(
             id=self.next_id,
-            name=name or f"Instance {self.next_id}",
-            label=label or self.default_label(self.next_id),
+            name=f"Instance {self.next_id}",
+            label=label,
             serial=serial,
-            template=template_path or "",
-            created=datetime.now().strftime("%Y-%m-%d %H:%M"),
+            template=template_path,
+            created=datetime.now().isoformat(),
         )
         self.instances.append(inst)
         self.next_id += 1
-        self._bootstrap(inst, serial, template_path)
+
+        inst_dir = self._instance_dir(inst.id)
+        inst_dir.mkdir(parents=True, exist_ok=True)
+
+        if template_path:
+            cfg_src = Path(template_path)
+            cfg_dst = inst_dir / "printer.cfg"
+            shutil.copy2(str(cfg_src), str(cfg_dst))
+            if serial:
+                self._update_serial_in_file(str(cfg_dst), serial)
+
+        self._setup_instance_dirs(inst)
         self._save()
         return inst
 
-    def _bootstrap(self, inst, serial, template_path):
-        d = self.instance_dir(inst.id)
-        d.mkdir(parents=True, exist_ok=True)
-
-        if template_path:
-            shutil.copy(template_path, d / "printer.cfg")
-            if serial:
-                self._update_serial(inst, serial)
-        else:
-            (d / "printer.cfg").write_text(f"# Instance {inst.id}\n[stepper_x]\n")
-
-        self._write_moonraker_conf(inst)
-        self._setup_mainsail(inst)
-
     def remove(self, instance_id):
         inst = self._get(instance_id)
-        d = self.instance_dir(instance_id)
-        if d.exists():
-            shutil.rmtree(d)
         self.instances.remove(inst)
-        self._save()
-
-    def _get(self, instance_id):
-        for i in self.instances:
-            if i.id == instance_id:
-                return i
-        raise KeyError(f"Instance {instance_id} not found")
-
-    def assign_serial(self, instance_id, device_path):
-        inst = self._get(instance_id)
-        inst.serial = device_path
-        self._update_serial(inst, device_path)
+        inst_dir = self._instance_dir(instance_id)
+        if inst_dir.exists():
+            shutil.rmtree(str(inst_dir))
         self._save()
 
     def rename(self, instance_id, name):
@@ -124,54 +88,88 @@ class Farm:
         self._get(instance_id).label = label
         self._save()
 
-    def _update_serial(self, inst, device_path):
-        cfg = self.printer_cfg(inst.id)
-        lines = cfg.read_text().splitlines()
-        in_mcu = False
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if s == "[mcu]":
-                in_mcu = True
-            elif in_mcu and s.startswith("serial:"):
-                lines[i] = f"serial: {device_path}"
-                break
-            elif in_mcu and s.startswith("["):
-                break
-        cfg.write_text("\n".join(lines) + "\n")
+    def assign_serial(self, instance_id, device):
+        inst = self._get(instance_id)
+        inst.serial = device
+        self._save()
+        cfg_path = self._instance_dir(instance_id) / "printer.cfg"
+        if cfg_path.exists():
+            self._update_serial_in_file(str(cfg_path), device)
 
-    def _write_moonraker_conf(self, inst):
-        p = self.ports(inst.id)
-        self.moonraker_conf(inst.id).write_text(
-            f"[server]\nhost: 0.0.0.0\nport: {p['moonraker']}\n"
-            f"klippy_uds_address: {p['uds']}\n\n"
-            f"[authorization]\ncors_domains:\n"
-            f"    http://localhost:{p['mainsail']}\n"
-            f"trusted_clients:\n    127.0.0.1\n    192.168.0.0/16\n"
-        )
-
-    def _setup_mainsail(self, inst):
-        src = APP_DIR / "mainsail_web"
-        dst = self.mainsail_dir(inst.id)
-        dst.mkdir(parents=True, exist_ok=True)
-
-        for item in src.iterdir():
-            if item.name == "config.json":
-                continue
-            link = dst / item.name
-            if not link.exists():
-                rel = os.path.relpath(item, dst)
-                link.symlink_to(rel)
-
-        p = self.ports(inst.id)
-        (dst / "config.json").write_text(json.dumps({
-            "hostname": "localhost",
-            "port": p["moonraker"],
-            "instancesDB": "moonraker",
-        }, indent=2))
-
-    def assigned_serials(self):
-        return {i.serial for i in self.instances if i.serial}
+    def ports(self, instance_id):
+        return {
+            "moonraker": 37124 + instance_id,
+            "mainsail": 8080 + instance_id,
+        }
 
     def unassigned_usb_devices(self, all_devices):
-        assigned = self.assigned_serials()
+        assigned = {inst.serial for inst in self.instances if inst.serial}
         return [d for d in all_devices if d not in assigned]
+
+    @staticmethod
+    def default_label(n):
+        n -= 1
+        letter = chr(ord('a') + (n % 26))
+        number = n // 26 + 1
+        return f"{letter}{number}"
+
+    def _setup_instance_dirs(self, inst):
+        inst_dir = self._instance_dir(inst.id)
+        mr_data = inst_dir / "moonraker_data"
+        mr_config = mr_data / "config"
+        mr_data.mkdir(parents=True, exist_ok=True)
+        mr_config.mkdir(parents=True, exist_ok=True)
+
+        cfg_src = inst_dir / "printer.cfg"
+        cfg_link = mr_config / "printer.cfg"
+        if cfg_src.exists():
+            if cfg_link.exists() or cfg_link.is_symlink():
+                cfg_link.unlink()
+            cfg_link.symlink_to(cfg_src)
+
+        self._ensure_moonraker_conf(inst)
+
+        mainsail_link = inst_dir / "mainsail"
+        if not mainsail_link.exists():
+            app_dir = Path(__file__).parent
+            mainsail_src = app_dir / "mainsail_web"
+            if mainsail_src.exists():
+                mainsail_link.symlink_to(mainsail_src, target_is_directory=True)
+
+    def _ensure_moonraker_conf(self, inst):
+        p = self.ports(inst.id)
+        inst_dir = self._instance_dir(inst.id)
+        conf_path = inst_dir / "moonraker.conf"
+        if conf_path.exists():
+            return
+        conf_path.write_text(
+            f"[server]\n"
+            f"host: 0.0.0.0\n"
+            f"port: {p['moonraker']}\n"
+            f"klippy_uds_address: /tmp/instances/instance_{inst.id}.sock\n\n"
+            f"[authorization]\n"
+            f"cors_domains:\n"
+            f"    http://localhost:{p['mainsail']}\n"
+            f"trusted_clients:\n"
+            f"    127.0.0.1\n"
+            f"    192.168.0.0/16\n\n"
+        )
+
+    @staticmethod
+    def _update_serial_in_file(cfg_path, device_path):
+        if not os.path.isfile(cfg_path):
+            return False
+        with open(cfg_path, "r") as f:
+            lines = f.readlines()
+        found_mcu = False
+        serial_replaced = False
+        with open(cfg_path, "w") as f:
+            for line in lines:
+                if line.strip().startswith("[mcu]"):
+                    found_mcu = True
+                elif found_mcu and line.strip().startswith("serial:"):
+                    line = f"serial: {device_path}\n"
+                    found_mcu = False
+                    serial_replaced = True
+                f.write(line)
+        return serial_replaced
