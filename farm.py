@@ -49,11 +49,11 @@ class Farm:
         return {
             "moonraker": 37124 + instance_id,
             "mainsail": 8080 + instance_id,
-            "uds": f"/tmp/instance_{instance_id}.sock",
+            "uds": f"/tmp/instances/instance_{instance_id}.sock",
         }
 
     def instance_dir(self, instance_id):
-        return self.data_dir / "instances" / str(instance_id)
+        return self.data_dir / f"instance{instance_id}"
 
     def printer_cfg(self, instance_id):
         return self.instance_dir(instance_id) / "printer.cfg"

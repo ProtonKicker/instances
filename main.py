@@ -31,8 +31,8 @@ def vis_width(s):
 
 # ── Config ───────────────────────────────────────────────────────
 APP_DIR = Path(__file__).parent
-CONFIG_FILE = APP_DIR / ".instance1_config.json"
-DATA_DIR = str(Path.home() / "Documents" / "instance1")
+CONFIG_FILE = APP_DIR / ".instances_config.json"
+DATA_DIR = str(Path.home() / "Documents" / "instances")
 _farm = None
 
 
@@ -42,7 +42,7 @@ def load_data_dir():
             return json.loads(CONFIG_FILE.read_text())["data_dir"]
         except (json.JSONDecodeError, KeyError):
             pass
-    return str(Path.home() / "Documents" / "instance1")
+    return str(Path.home() / "Documents" / "instances")
 
 
 def setup_data_dir():
