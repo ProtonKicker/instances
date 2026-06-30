@@ -1,10 +1,23 @@
 import os
 import sys
+import json
+import argparse
 from pathlib import Path
 import detect
 import process
 
+APP_DIR = Path(__file__).parent
+CONFIG_FILE = APP_DIR / ".instance1_config.json"
 DATA_DIR = str(Path.home() / "Documents" / "instance1")
+
+
+def load_data_dir():
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())["data_dir"]
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return str(Path.home() / "Documents" / "instance1")
 
 
 def setup_data_dir():
@@ -43,6 +56,18 @@ def render_status():
 
 
 def main():
+    global DATA_DIR
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-dir", type=str, help="data directory path")
+    args = parser.parse_args()
+
+    if args.data_dir:
+        DATA_DIR = str(Path(args.data_dir).expanduser().resolve())
+        CONFIG_FILE.write_text(json.dumps({"data_dir": DATA_DIR}))
+    else:
+        DATA_DIR = load_data_dir()
+
     setup_data_dir()
 
     while True:
@@ -59,13 +84,33 @@ def main():
                 break
 
         else:
-            cmd = input("Commands: [launch] [detect] [exit]\n> ").strip().lower()
+            cmd = input("Commands: [launch] [detect] [setdir] [exit]\n> ").strip().lower()
 
             if cmd == "exit":
                 print("Goodbye!")
                 break
 
             elif cmd == "detect":
+                devices = detect.scan()
+                print(f"✓ Scanned: {len(devices)} device(s) found")
+                input("Press Enter...")
+                continue
+
+            elif cmd == "setdir":
+                new_dir = input("Enter new data directory path:\n> ").strip()
+                if new_dir:
+                    new_dir = str(Path(new_dir).expanduser().resolve())
+                    try:
+                        Path(new_dir).mkdir(parents=True, exist_ok=True)
+                        test_file = Path(new_dir) / ".write_test"
+                        test_file.write_text("test")
+                        test_file.unlink()
+                        DATA_DIR = new_dir
+                        CONFIG_FILE.write_text(json.dumps({"data_dir": DATA_DIR}))
+                        print(f"✅ Data directory set to: {DATA_DIR}")
+                    except (OSError, PermissionError) as e:
+                        print(f"❌ Cannot write to {new_dir}: {e}")
+                input("Press Enter...")
                 continue
 
             elif cmd == "launch":
@@ -107,7 +152,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         process.kill()
         print("\nGoodbye!")
         sys.exit(0)
