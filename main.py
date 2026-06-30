@@ -28,19 +28,31 @@ def setup_data_dir():
 
 def render_status():
     os.system('clear')
-    print(" 🪄  Instance 1 FARM\n")
+    print(" 🪄  Instance 1 \n")
     print(f" \U0001f4c1  Data: {DATA_DIR}\n")
 
     devices = detect.scan()
-    assigned = _farm.assigned_serials() if _farm else set()
-    available = len([d for d in devices if d not in assigned])
-    print(f" \U0001f4cb  Devices: {len(devices)} total ({len(assigned)} assigned, {available} available)\n")
+    serial_to_inst = {}
+    if _farm:
+        for inst in _farm.instances:
+            if inst.serial:
+                serial_to_inst[inst.serial] = inst
+    print(" \U0001f4cb  Devices:")
+    shown = 0
+    for dev in devices:
+        if dev in serial_to_inst:
+            inst = serial_to_inst[dev]
+            print(f"       Instance {inst.id} ({inst.label}) - {os.path.basename(dev)}")
+            shown += 1
+        else:
+            print(f"       (unassigned) - {os.path.basename(dev)}")
+            shown += 1
+    if shown == 0:
+        print("       (none)")
+    print()
 
-    if _farm and _farm.instances:
-        running = process.running_count()
-        print(f" \U0001f4e6  Instances: {len(_farm.instances)} total, {running} running")
-    else:
-        print(" \U0001f4e6  Instances: none (use `setup` or `add`)")
+    print(" \U0001f4e6  Instances:")
+    print(_instance_summary())
     print()
 
 
@@ -108,6 +120,35 @@ def _pick_device(available, prompt="Select device"):
     return ""
 
 
+def _resolve_instance(identifier):
+    if not _farm:
+        return None
+    try:
+        return _farm._get(int(identifier))
+    except (ValueError, KeyError):
+        pass
+    for inst in _farm.instances:
+        if inst.label.lower() == identifier:
+            return inst
+    for inst in _farm.instances:
+        if inst.name.lower() == identifier.lower():
+            return inst
+    return None
+
+
+def _instance_summary():
+    lines = []
+    if _farm:
+        for inst, state in process.status(_farm):
+            icon = {"running": "\U0001f7e2", "stopped": "\u26aa", "error": "\U0001f534"}[state]
+            tag = f' "{inst.name}"' if inst.name != f"Instance {inst.id}" else ""
+            url = f"  http://localhost:{_farm.ports(inst.id)['mainsail']}" if state == "running" else ""
+            lines.append(f"       [{inst.id}] ({inst.label}){tag} {icon}{url}")
+    if not lines:
+        lines.append("       (none)")
+    return "\n".join(lines)
+
+
 def cmd_setup():
     try:
         count = int(input("How many printers? ").strip())
@@ -130,7 +171,7 @@ def cmd_setup():
         inst = _farm.create(label=label, serial=device, template_path=template)
         print(f"  \u2705  Created Instance {inst.id} [{inst.label}]")
 
-    print(f"\n\u2705  {count} instances created. Use `launch all` to start.")
+    print(f"\n\u2705  {count} instances created.")
 
 
 def cmd_add():
@@ -194,28 +235,25 @@ def cmd_assign(instance_id):
         print(f"\u2705  Serial updated for Instance {instance_id}")
 
 
-def cmd_launch(instance_id):
-    try:
-        inst = _farm._get(instance_id)
-    except KeyError:
-        print(f"Instance {instance_id} not found")
+def cmd_launch(identifier):
+    inst = _resolve_instance(identifier)
+    if inst is None:
+        print(f"Printer '{identifier}' not found")
         return
-
     if not inst.serial:
-        print(f"Instance {instance_id} has no serial device assigned")
+        print(f"Instance {inst.id} has no serial device assigned")
         return
     if not process.check_serial_access(inst.serial):
         print(f"Cannot access serial: {inst.serial}")
         print("Try: newgrp uucp")
         return
-
     if process.start(_farm, inst):
         p = _farm.ports(inst.id)
-        print(f"\u2705  Instance {instance_id} ({inst.label}) launched")
+        print(f"\u2705  Instance {inst.id} ({inst.label}) launched")
         print(f"   Moonraker: http://localhost:{p['moonraker']}")
         print(f"   Mainsail:  http://localhost:{p['mainsail']}")
     else:
-        print(f"Instance {instance_id} is already running")
+        print(f"Instance {inst.id} is already running")
 
 
 def cmd_launch_all():
@@ -226,9 +264,13 @@ def cmd_launch_all():
     print(f"\u2705  {launched}/{len(_farm.instances)} instances launched")
 
 
-def cmd_stop(instance_id):
-    print(f"\u2705  Instance {instance_id} stopped" if process.stop(instance_id)
-          else f"Instance {instance_id} was not running")
+def cmd_stop(identifier):
+    inst = _resolve_instance(identifier)
+    if inst is None:
+        print(f"Printer '{identifier}' not found")
+        return
+    print(f"\u2705  Instance {inst.id} stopped" if process.stop(inst.id)
+          else f"Instance {inst.id} was not running")
 
 
 def cmd_stop_all():
@@ -263,9 +305,92 @@ def _render_table(rows):
 
 def cmd_status():
     if not _farm or not _farm.instances:
-        print("No instances configured. Use `setup` or `add`.")
+        print("No instances configured.")
         return
     _render_table(process.status(_farm))
+
+
+def _printer_menu(inst):
+    while True:
+        os.system('clear')
+        state = "running" if process.is_running(inst.id) else "stopped"
+        icon = {"running": "\U0001f7e2", "stopped": "\u26aa", "error": "\U0001f534"}[state]
+        serial_short = os.path.basename(inst.serial)[:30] if inst.serial else "(none)"
+
+        print(f" \U0001fa84  Instance {inst.id} ({inst.label}) {icon}\n")
+        print(f"  Name:   {inst.name}")
+        print(f"  Label:  {inst.label}")
+        print(f"  Serial: {serial_short}")
+        p = _farm.ports(inst.id)
+        if process.is_running(inst.id):
+            print(f"  Moonraker: http://localhost:{p['moonraker']}")
+            print(f"  Mainsail:  http://localhost:{p['mainsail']}")
+        else:
+            print(f"  Ports:   Moonraker:{p['moonraker']}  Mainsail:{p['mainsail']}")
+        print()
+
+        raw = input(
+            "  [launch]   [stop]    [rename]  [label]\n"
+            "  [assign]   [remove]  [back] or [/]\n> "
+        ).strip().lower()
+        if not raw:
+            continue
+
+        if raw in ("back", "/"):
+            break
+        elif raw == "launch":
+            cmd_launch(str(inst.id))
+        elif raw == "stop":
+            cmd_stop(str(inst.id))
+        elif raw == "remove":
+            cmd_remove(inst.id)
+            try:
+                _farm._get(inst.id)
+            except KeyError:
+                break
+        elif raw == "rename":
+            name = input("New name: ").strip()
+            if name:
+                cmd_rename(inst.id, name)
+                inst = _farm._get(inst.id)
+        elif raw == "label":
+            label = input("New label (letters + digits, e.g. b18): ").strip().lower()
+            if label:
+                cmd_label(inst.id, label)
+                inst = _farm._get(inst.id)
+        elif raw == "assign":
+            cmd_assign(inst.id)
+        input("Press Enter...")
+
+
+
+
+
+def _printers_menu():
+    while True:
+        os.system('clear')
+        print(" 🪄  Instance 1 FARM - Printer Management\n")
+        if _farm and _farm.instances:
+            print(" \U0001f4e6  Instances:")
+            print(_instance_summary())
+            print()
+
+        raw = input(
+            "Printer Management:\n"
+            "  [add]              add new printer\n"
+            "  [status]           show printer table\n"
+            "  [back] or [/]      return to main menu\n> "
+        ).strip().lower()
+        if not raw:
+            continue
+
+        if raw in ("back", "/"):
+            break
+        elif raw == "add":
+            cmd_add()
+        elif raw == "status":
+            cmd_status()
+        input("Press Enter...")
 
 
 def main():
@@ -287,116 +412,53 @@ def main():
     while True:
         render_status()
 
-        if process.running_count() > 0:
-            raw = input("Commands: [stop N] [stop all] [status] [exit]\n> ").strip().lower()
-            parts = raw.split(maxsplit=1)
-            verb, arg = parts[0], parts[1] if len(parts) > 1 else None
+        raw = input(
+            "Commands:\n"
+            "  [printers]  add, status\n"
+            "  [detect]    rescan USB devices\n"
+            "  [setdir]    change data directory\n"
+            "\n"
+            "  Or type a printer (label/ID/name) to manage it\n"
+            "\n"
+            "  [exit/quit]  quit\n"
+            "\n> "
+        ).strip().lower()
+        if not raw:
+            continue
 
-            if verb == "exit":
+        if raw in ("exit", "quit"):
+            if process.running_count() > 0:
                 process.stop_all()
-                print("Goodbye!")
-                break
-            elif verb == "status":
-                cmd_status()
-            elif verb == "stop":
-                if arg == "all":
-                    cmd_stop_all()
-                elif arg:
-                    try:
-                        cmd_stop(int(arg))
-                    except ValueError:
-                        print("Usage: stop N or stop all")
-                else:
-                    running = [i for i in _farm.instances if process.is_running(i.id)]
-                    cmd_stop(running[0].id) if len(running) == 1 else print("Specify: stop N")
+            print("Goodbye! \n")
+            break
+        elif raw == "printers":
+            _printers_menu()
+        elif raw == "detect":
+            d = detect.scan()
+            print(f"\u2713  Scanned: {len(d)} device(s) found")
             input("Press Enter...")
-
+        elif raw == "setdir":
+            new = input("Enter new data directory path:\n> ").strip()
+            if new:
+                new = str(Path(new).expanduser().resolve())
+                try:
+                    Path(new).mkdir(parents=True, exist_ok=True)
+                    (Path(new) / ".write_test").write_text("test")
+                    Path(new, ".write_test").unlink()
+                    DATA_DIR = new
+                    CONFIG_FILE.write_text(json.dumps({"data_dir": DATA_DIR}))
+                    _farm = Farm(DATA_DIR)
+                    print(f"\u2705  Data directory set to: {DATA_DIR}")
+                except (OSError, PermissionError) as e:
+                    print(f"\u274c  {e}")
+                input("Press Enter...")
         else:
-            raw = input(
-                "Commands: [launch N] [launch all] [status] [setup] [add]\n"
-                "          [remove N] [rename N] [label N] [assign N]\n"
-                "          [detect] [setdir] [exit]\n> "
-            ).strip().lower()
-            parts = raw.split(maxsplit=1)
-            verb, arg = parts[0], parts[1] if len(parts) > 1 else None
-
-            if verb == "exit":
-                print("Goodbye!")
-                break
-            elif verb == "detect":
-                d = detect.scan()
-                print(f"\u2713  Scanned: {len(d)} device(s) found")
-            elif verb == "setdir":
-                new = input("Enter new data directory path:\n> ").strip()
-                if new:
-                    new = str(Path(new).expanduser().resolve())
-                    try:
-                        Path(new).mkdir(parents=True, exist_ok=True)
-                        (Path(new) / ".write_test").write_text("test")
-                        Path(new, ".write_test").unlink()
-                        DATA_DIR = new
-                        CONFIG_FILE.write_text(json.dumps({"data_dir": DATA_DIR}))
-                        _farm = Farm(DATA_DIR)
-                        print(f"\u2705  Data directory set to: {DATA_DIR}")
-                    except (OSError, PermissionError) as e:
-                        print(f"\u274c  {e}")
-            elif verb == "setup":
-                cmd_setup()
-            elif verb == "add":
-                cmd_add()
-            elif verb == "remove":
-                if arg:
-                    try:
-                        cmd_remove(int(arg))
-                    except ValueError:
-                        print("Usage: remove N")
-                else:
-                    print("Usage: remove N")
-            elif verb == "rename":
-                if arg:
-                    p2 = arg.split(maxsplit=1)
-                    try:
-                        iid = int(p2[0])
-                        name = p2[1] if len(p2) > 1 else input("New name: ").strip()
-                        cmd_rename(iid, name)
-                    except ValueError:
-                        print("Usage: rename N 'name'")
-                else:
-                    print("Usage: rename N 'name'")
-            elif verb == "label":
-                if arg:
-                    p2 = arg.split(maxsplit=1)
-                    try:
-                        iid = int(p2[0])
-                        label = p2[1] if len(p2) > 1 else input("New label: ").strip()
-                        cmd_label(iid, label)
-                    except ValueError:
-                        print("Usage: label N 'label'")
-                else:
-                    print("Usage: label N 'label'")
-            elif verb == "assign":
-                if arg:
-                    try:
-                        cmd_assign(int(arg))
-                    except ValueError:
-                        print("Usage: assign N")
-                else:
-                    print("Usage: assign N")
-            elif verb == "status":
-                cmd_status()
-            elif verb == "launch":
-                if arg == "all":
-                    cmd_launch_all()
-                elif arg:
-                    try:
-                        cmd_launch(int(arg))
-                    except ValueError:
-                        print("Usage: launch N or launch all")
-                elif len(_farm.instances) == 1:
-                    cmd_launch(_farm.instances[0].id)
-                else:
-                    print("Specify: launch N")
-            input("Press Enter...")
+            inst = _resolve_instance(raw)
+            if inst:
+                _printer_menu(inst)
+            else:
+                print(f"Unknown command or printer '{raw}' not found")
+                input("Press Enter...")
 
 
 if __name__ == "__main__":
