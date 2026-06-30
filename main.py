@@ -1,40 +1,113 @@
-import startup
+import os
+import sys
+from pathlib import Path
+import detect
 import process
 
+DATA_DIR = str(Path.home() / "Documents" / "instance1")
+
+
+def setup_data_dir():
+    target = Path(DATA_DIR)
+    if not target.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        print(f"Created directory at: {target}")
+
+
+def render_status():
+    os.system('clear')
+    print("🪽  Instance 1 ALIVE\n")
+
+    print(f"📁  Data: {DATA_DIR}\n")
+
+    devices = detect.scan()
+    if len(devices) == 0:
+        print("📋  No devices found")
+    else:
+        print(f"📋  Devices ({len(devices)} found):")
+        for i, dev in enumerate(devices):
+            name = os.path.basename(dev)
+            print(f"      [{i}] {name}")
+    print()
+
+    if detect.check_config(DATA_DIR):
+        print("🔧  Config: printer.cfg ✓")
+    else:
+        print("🔧  Config: printer.cfg ⚠️  missing")
+        print(f"      Place your printer.cfg in: {DATA_DIR}")
+    print()
+
+    if process.get_state():
+        print("🟢  Instance 1 is RUNNING")
+        print("🌍  Mainsail: http://localhost:8080\n")
+
+
 def main():
-    startup.startup()
+    setup_data_dir()
 
     while True:
-        # Capture the user input ONCE at the top of the loop
-        user_choice = input("👉 ").strip().lower()
+        render_status()
 
-        if user_choice == "exit":
-            print("Goodbye!")
-            break
+        if process.get_state():
+            cmd = input("Commands: [kill] [exit]\n> ").strip().lower()
 
-        # Check server status
-        if not process.get_state():
-            if user_choice in ["launch", "start"]:
-                process.start_klipper()
-
-                # confirm start
-                if process.get_state():
-                    print("Klipper active")
-                else:
-                    print("Klipper failed to start")
+            if cmd == "kill":
+                process.kill()
+            elif cmd == "exit":
+                process.kill()
+                print("Goodbye!")
+                break
 
         else:
-            if user_choice in ["kill", "stop"]:
-                process.kill_klipper()
+            cmd = input("Commands: [launch] [detect] [exit]\n> ").strip().lower()
 
-                # confirm shutdown
-                if not process.get_state():
-                    print("Klipper down")
-                else:
-                    print("Klipper failed to stop")
+            if cmd == "exit":
+                print("Goodbye!")
+                break
+
+            elif cmd == "detect":
+                continue
+
+            elif cmd == "launch":
+                devices = detect.scan()
+
+                if not detect.check_config(DATA_DIR):
+                    input("No printer.cfg found. Press Enter...")
+                    continue
+
+                if len(devices) == 0:
+                    input("No USB devices found. Press Enter...")
+                    continue
+
+                selected = devices[0]
+                if len(devices) > 1:
+                    try:
+                        idx = int(input(f"Select device [0-{len(devices)-1}]: "))
+                        if 0 <= idx < len(devices):
+                            selected = devices[idx]
+                        else:
+                            input("Invalid selection. Press Enter...")
+                            continue
+                    except ValueError:
+                        input("Invalid input. Press Enter...")
+                        continue
+
+                if not process.check_serial_access(selected):
+                    print("\n⚠️  Cannot access serial port.")
+                    print("   Run this command and log out/back in (or maybe this one newgrp uucp):")
+                    print("     sudo usermod -aG uucp $USER")
+                    input("\nPress Enter...")
+                    continue
+
+                detect.update_serial(DATA_DIR, selected)
+                print(f"✅ Serial updated: {os.path.basename(selected)}")
+                process.start(DATA_DIR)
 
 
-
-# tells Python to execute the main() function when this file is run
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        process.kill()
+        print("\nGoodbye!")
+        sys.exit(0)
