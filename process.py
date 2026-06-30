@@ -1,91 +1,92 @@
 import subprocess
 import os
-import sys
-import http.server
-import socketserver
-import threading
-
-_klipper_proc = None
-_moonraker_proc = None
-_web_thread = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_running = {}
 
 
-def _get_python_exe():
-    venv_python = os.path.join(BASE_DIR, ".venv", "bin", "python")
-    if os.path.isfile(venv_python):
-        return venv_python
-    return sys.executable
+def _python():
+    venv = os.path.join(BASE_DIR, ".venv", "bin", "python")
+    return venv if os.path.isfile(venv) else "python3"
 
 
-def start(data_dir):
-    global _klipper_proc, _moonraker_proc, _web_thread
-
-    if get_state():
-        print("Instance 1 is already running")
+def start(farm, inst):
+    if inst.id in _running:
         return False
 
-    printer_cfg = os.path.join(data_dir, "printer.cfg")
-    if not os.path.isfile(printer_cfg):
-        print("No printer.cfg found at:", printer_cfg)
-        return False
+    p = farm.ports(inst.id)
+    klipper_py = os.path.join(BASE_DIR, "klipper_core", "klippy", "klippy.py")
+    klipper_cwd = os.path.join(BASE_DIR, "klipper_core", "klippy")
+    moonraker_py = os.path.join(BASE_DIR, "moonraker_core", "moonraker", "moonraker.py")
+    moonraker_cwd = os.path.join(BASE_DIR, "moonraker_core")
+    py = _python()
 
-    moonraker_conf = _ensure_moonraker_config(data_dir)
+    printer_cfg = str(farm.printer_cfg(inst.id))
+    moonraker_conf = str(farm.moonraker_conf(inst.id))
+    moonraker_data = str(farm.moonraker_data(inst.id))
+    mainsail_dir = str(farm.mainsail_dir(inst.id))
 
-    config_link = os.path.join(data_dir, "moonraker_data", "config", "printer.cfg")
+    config_link = os.path.join(moonraker_data, "config", "printer.cfg")
     os.makedirs(os.path.dirname(config_link), exist_ok=True)
     if not os.path.islink(config_link) or os.path.realpath(config_link) != os.path.realpath(printer_cfg):
         if os.path.lexists(config_link):
             os.remove(config_link)
         os.symlink(printer_cfg, config_link)
 
-    klipper_py = os.path.join(BASE_DIR, "klipper_core", "klippy", "klippy.py")
-    klipper_cwd = os.path.join(BASE_DIR, "klipper_core", "klippy")
-    _klipper_proc = subprocess.Popen(
-        [_get_python_exe(), klipper_py, "-a", "/tmp/instance1_uds", config_link],
-        cwd=klipper_cwd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+    kproc = subprocess.Popen(
+        [py, klipper_py, "-a", p["uds"], printer_cfg],
+        cwd=klipper_cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-
-    moonraker_py = os.path.join(BASE_DIR, "moonraker_core", "moonraker", "moonraker.py")
-    moonraker_cwd = os.path.join(BASE_DIR, "moonraker_core")
-    moonraker_data = os.path.join(data_dir, "moonraker_data")
-    _moonraker_proc = subprocess.Popen(
-        [_get_python_exe(), moonraker_py, "-c", moonraker_conf, "-d", moonraker_data],
-        cwd=moonraker_cwd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+    mproc = subprocess.Popen(
+        [py, moonraker_py, "-c", moonraker_conf, "-d", moonraker_data],
+        cwd=moonraker_cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-
-    mainsail_dir = os.path.join(BASE_DIR, "mainsail_web")
-    _web_thread = threading.Thread(
-        target=_run_web_server, args=(mainsail_dir, 8080), daemon=True
+    wproc = subprocess.Popen(
+        [py, "-m", "http.server", str(p["mainsail"]), "--directory", mainsail_dir],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
-    _web_thread.start()
-
-    print("Mainsail: http://localhost:8080")
+    _running[inst.id] = {"klipper": kproc, "moonraker": mproc, "mainsail": wproc}
     return True
 
 
-def kill():
-    global _klipper_proc, _moonraker_proc
-
-    if _moonraker_proc and _moonraker_proc.poll() is None:
-        _moonraker_proc.terminate()
-
-    if _klipper_proc and _klipper_proc.poll() is None:
-        _klipper_proc.terminate()
-
-    _klipper_proc = None
-    _moonraker_proc = None
-
-
-def get_state():
-    if _klipper_proc is None:
+def stop(instance_id):
+    procs = _running.pop(instance_id, None)
+    if not procs:
         return False
-    return _klipper_proc.poll() is None
+    for key in ("mainsail", "moonraker", "klipper"):
+        p = procs.get(key)
+        if p and p.poll() is None:
+            p.terminate()
+    return True
+
+
+def stop_all():
+    for pid in list(_running):
+        stop(pid)
+
+
+def is_running(instance_id):
+    procs = _running.get(instance_id)
+    if not procs:
+        return False
+    k = procs.get("klipper")
+    return k is not None and k.poll() is None
+
+
+def running_count():
+    return len(_running)
+
+
+def status(farm):
+    rows = []
+    for inst in farm.instances:
+        if inst.id in _running:
+            k = _running[inst.id]["klipper"]
+            state = "running" if k and k.poll() is None else "error"
+        else:
+            state = "stopped"
+        rows.append((inst, state))
+    return rows
 
 
 def check_serial_access(device_path):
@@ -97,33 +98,3 @@ def check_serial_access(device_path):
         return False
     except OSError:
         return False
-
-
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, format, *args):
-        pass
-
-def _run_web_server(directory, port):
-    os.chdir(directory)
-    with socketserver.TCPServer(("", port), _QuietHandler) as httpd:
-        httpd.serve_forever()
-
-
-def _ensure_moonraker_config(data_dir):
-    conf_path = os.path.join(data_dir, "moonraker.conf")
-    if os.path.isfile(conf_path):
-        return conf_path
-
-    with open(conf_path, "w") as f:
-        f.write("[server]\n")
-        f.write("host: 0.0.0.0\n")
-        f.write("port: 7125\n")
-        f.write("klippy_uds_address: /tmp/instance1_uds\n\n")
-        f.write("[authorization]\n")
-        f.write("cors_domains:\n")
-        f.write("    http://localhost:8080\n")
-        f.write("trusted_clients:\n")
-        f.write("    127.0.0.1\n")
-        f.write("    192.168.0.0/16\n\n")
-
-    return conf_path
