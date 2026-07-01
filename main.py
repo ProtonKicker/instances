@@ -31,7 +31,7 @@ def vis_width(s):
 
 # ── Config ───────────────────────────────────────────────────────
 APP_DIR = Path(__file__).parent
-CONFIG_FILE = APP_DIR / ".instances_config.json"
+CONFIG_FILE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "farm" / "config.json"
 DATA_DIR = str(Path.home() / "Documents" / "instances")
 _farm = None
 
@@ -590,6 +590,7 @@ def main():
 
     if args.data_dir:
         DATA_DIR = str(Path(args.data_dir).expanduser().resolve())
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps({"data_dir": DATA_DIR}))
     else:
         DATA_DIR = load_data_dir()
@@ -624,6 +625,7 @@ def main():
                     (Path(new) / ".write_test").write_text("test")
                     Path(new, ".write_test").unlink()
                     DATA_DIR = new
+                    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
                     CONFIG_FILE.write_text(json.dumps({"data_dir": DATA_DIR}))
                     _farm = Farm(DATA_DIR)
                     print(f"\u2705  Data directory set to: {DATA_DIR}")

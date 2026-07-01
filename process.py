@@ -6,6 +6,11 @@ _running = {}
 
 
 def _python():
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        bundled = os.path.join(appdir, "usr", "bin", "python3")
+        if os.path.isfile(bundled):
+            return bundled
     venv = os.path.join(BASE_DIR, ".venv", "bin", "python")
     return venv if os.path.isfile(venv) else "python3"
 
