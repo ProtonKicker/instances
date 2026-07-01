@@ -4,6 +4,10 @@ import json
 import argparse
 import re
 import shutil
+import signal
+import select
+import tty
+import termios
 from pathlib import Path
 import detect
 import process
@@ -30,6 +34,14 @@ def vis_width(s):
         else:
             w += 1
     return w
+
+# ── Live resize ──────────────────────────────────────────────────
+_resize_flag = False
+
+def _on_resize(signum, frame):
+    global _resize_flag
+    _resize_flag = True
+
 
 # ── Config ───────────────────────────────────────────────────────
 APP_DIR = Path(__file__).parent
@@ -369,6 +381,70 @@ def cmd_status():
     _render_table(process.status(_farm))
 
 
+# ── Live resize helpers ─────────────────────────────────────────
+def _render_logo(width):
+    if width >= 68:
+        return [
+            f"{PURPLE}  ██╗███╗   ██╗███████╗████████╗ █████╗ ███╗   ██╗ ██████╗███████╗███████╗{RESET}",
+            f"{PURPLE}  ██║████╗  ██║██╔════╝╚══██╔══╝██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝{RESET}",
+            f"{PURPLE}  ██║██╔██╗ ██║███████╗   ██║   ███████║██╔██╗ ██║██║     █████╗  ███████╗{RESET}",
+            f"{PURPLE}  ██║██║╚██╗██║╚════██║   ██║   ██╔══██║██║╚██╗██║██║     ██╔══╝  ╚════██║{RESET}",
+            f"{PURPLE}  ██║██║ ╚████║███████║   ██║   ██║  ██║██║ ╚████║╚██████╗███████╗███████║{RESET}",
+            f"{PURPLE}  ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚══════╝{RESET}",
+        ]
+    else:
+        return [f"{PURPLE}{'I N S T A N C E S':^{width}}{RESET}"]
+
+
+def _adaptive_input(prompt=""):
+    """input() replacement that redraws on terminal resize."""
+    global _resize_flag
+
+    if not sys.stdin.isatty():
+        return input(prompt)
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+
+        buf = ""
+        while True:
+            if _resize_flag:
+                _resize_flag = False
+                w = shutil.get_terminal_size().columns
+                sys.stdout.write("\r" + " " * (w - 1) + "\r")
+                render_status()
+                sys.stdout.write(prompt + buf)
+                sys.stdout.flush()
+
+            try:
+                r, _, _ = select.select([sys.stdin], [], [], 0.3)
+            except InterruptedError:
+                continue
+            if not r:
+                continue
+
+            ch = sys.stdin.read(1)
+            if ch == "\n":
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return buf
+            elif ch in ("\x7f", "\b"):
+                if buf:
+                    buf = buf[:-1]
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+            else:
+                buf += ch
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 # ── Main screen builder ─────────────────────────────────────────
 def _grid_display():
     if not _farm or not _farm.instances:
@@ -412,18 +488,9 @@ def _build_content(width):
 
     grid_lines, url_lines, has_any = _grid_display()
 
-    logo = [
-        f"{PURPLE}  ██╗███╗   ██╗███████╗████████╗ █████╗ ███╗   ██╗ ██████╗███████╗███████╗{RESET}",
-        f"{PURPLE}  ██║████╗  ██║██╔════╝╚══██╔══╝██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝{RESET}",
-        f"{PURPLE}  ██║██╔██╗ ██║███████╗   ██║   ███████║██╔██╗ ██║██║     █████╗  ███████╗{RESET}",
-        f"{PURPLE}  ██║██║╚██╗██║╚════██║   ██║   ██╔══██║██║╚██╗██║██║     ██╔══╝  ╚════██║{RESET}",
-        f"{PURPLE}  ██║██║ ╚████║███████║   ██║   ██║  ██║██║ ╚████║╚██████╗███████╗███████║{RESET}",
-        f"{PURPLE}  ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚══════╝{RESET}",
-    ]
-
     div = "-" * width
     lines = [""]
-    lines.extend(logo)
+    lines.extend(_render_logo(width))
     lines.append("")
     info = f"\U0001f4c1 {DATA_DIR}"
     if total > 0 or running > 0:
@@ -449,15 +516,33 @@ def _build_content(width):
     lines.append(div)
     lines.append("")
     L = lambda s: f"{LAVENDER}{s}{RESET}"
-    lines.append(f"{L('p')}  add printer             {L('d')}  detect USB")
-    lines.append(f"{L('s')}  set directory           {L('h')}  help")
-    lines.append("")
-    lines.append(f"{L('sa')}  start all                {L('ka')}  kill all")
-    lines.append(f"{L('s-a1')}  start a1               {L('k-a1')}  kill a1")
-    lines.append(f"{L('n-a1')}  rename a1              {L('l-a1')}  relabel a1")
-    lines.append(f"{L('b-a1')}  assign board           {L('x-a1')}  remove a1")
-    lines.append("")
-    lines.append(f"{L('x-a1:b2')}  remove instances in outlined area")
+    if width >= 60:
+        lines.append(f"{L('p')}  add printer             {L('d')}  detect USB")
+        lines.append(f"{L('s')}  set directory           {L('h')}  help")
+        lines.append("")
+        lines.append(f"{L('sa')}  start all                {L('ka')}  kill all")
+        lines.append(f"{L('s-a1')}  start a1               {L('k-a1')}  kill a1")
+        lines.append(f"{L('n-a1')}  rename a1              {L('l-a1')}  relabel a1")
+        lines.append(f"{L('b-a1')}  assign board           {L('x-a1')}  remove a1")
+        lines.append("")
+        lines.append(f"{L('x-a1:b2')}  remove instances in outlined area")
+    else:
+        lines.append(f"{L('p')}          add printer")
+        lines.append(f"{L('d')}          detect USB")
+        lines.append(f"{L('s')}          set directory")
+        lines.append(f"{L('h')}          help")
+        lines.append("")
+        lines.append(f"{L('sa')}         start all")
+        lines.append(f"{L('ka')}         kill all")
+        lines.append("")
+        lines.append(f"{L('s-a1')}       start a1")
+        lines.append(f"{L('k-a1')}       kill a1")
+        lines.append(f"{L('n-a1')}       rename a1")
+        lines.append(f"{L('l-a1')}       relabel a1")
+        lines.append(f"{L('b-a1')}       assign board")
+        lines.append(f"{L('x-a1')}       remove a1")
+        lines.append("")
+        lines.append(f"{L('x-a1:b2')}    remove instances in outlined area")
     lines.append("")
     lines.append(div)
     lines.append(f"Type a label ({L('a1')}) or name")
@@ -572,10 +657,13 @@ def main():
     setup_data_dir()
     _farm = Farm(DATA_DIR)
 
+    signal.signal(signal.SIGWINCH, _on_resize)
+    signal.siginterrupt(signal.SIGWINCH, True)
+
     while True:
         render_status()
 
-        raw = input("\n> ").strip().lower()
+        raw = _adaptive_input("\n> ").strip().lower()
         if not raw:
             continue
 
