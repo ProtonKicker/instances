@@ -124,6 +124,24 @@ class Farm:
         self._get(instance_id).label = label
         self._save()
 
+    def find_by_name(self, name):
+        for i in self.instances:
+            if i.name.lower() == name.lower():
+                return i
+        return None
+
+    def find_by_label(self, label):
+        for i in self.instances:
+            if i.label.lower() == label.lower():
+                return i
+        return None
+
+    def label_exists(self, label):
+        return self.find_by_label(label) is not None
+
+    def name_exists(self, name):
+        return self.find_by_name(name) is not None
+
     def _update_serial(self, inst, device_path):
         cfg = self.printer_cfg(inst.id)
         lines = cfg.read_text().splitlines()

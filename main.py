@@ -3,6 +3,7 @@ import sys
 import json
 import argparse
 import re
+import shutil
 from pathlib import Path
 import detect
 import process
@@ -10,6 +11,7 @@ from farm import Farm
 
 # ── ANSI colors ──────────────────────────────────────────────────
 PURPLE = "\033[38;2;211;211;255m"
+LAVENDER = "\033[1m\033[38;2;180;180;235m"
 GREEN = "\033[32m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -205,8 +207,27 @@ def cmd_add():
     all_devices = detect.scan()
     available = _farm.unassigned_usb_devices(all_devices)
     device = _pick_device(available) if available else ""
-    label = Farm.default_label(_farm.next_id)
-    inst = _farm.create(label=label, serial=device, template_path=template)
+
+    default_name = f"Instance {_farm.next_id}"
+    default_label = Farm.default_label(_farm.next_id)
+
+    name = input(f"Name [{default_name}]: ").strip()
+    if not name:
+        name = default_name
+    while _farm.name_exists(name):
+        name = input(f"Name '{name}' already exists. Enter another [{default_name}]: ").strip()
+        if not name:
+            name = default_name
+
+    label = input(f"Label [{default_label}]: ").strip().lower()
+    if not label:
+        label = default_label
+    while _farm.label_exists(label):
+        label = input(f"Label '{label}' already exists. Enter another [{default_label}]: ").strip().lower()
+        if not label:
+            label = default_label
+
+    inst = _farm.create(name=name, label=label, serial=device, template_path=template)
     print(f"\u2705  Created Instance {inst.id} [{inst.label}]")
 
 
@@ -283,16 +304,16 @@ def cmd_stop(inst):
           else f"{inst.name} ({inst.label}) was not running")
 
 
-def cmd_launch_all():
-    launched = 0
+def cmd_start_all():
+    started = 0
     for inst in _farm.instances:
         if inst.serial and not process.is_running(inst.id):
             cmd_launch(inst)
-            launched += 1
-    if launched == 0:
+            started += 1
+    if started == 0:
         print("All instances are already running")
     else:
-        print(f"\u2705  {launched}/{len(_farm.instances)} instances launched")
+        print(f"\u2705  {started}/{len(_farm.instances)} instances started")
 
 
 def cmd_stop_all():
@@ -385,188 +406,141 @@ def _grid_display():
     return grid_lines, url_lines, True
 
 
-def _build_content():
+def _build_content(width):
     total = len(_farm.instances) if _farm else 0
     running = sum(1 for inst in (_farm.instances or []) if process.is_running(inst.id)) if _farm else 0
 
     grid_lines, url_lines, has_any = _grid_display()
 
-    lines = []
-    margin = "  "
+    logo = [
+        f"{PURPLE}  ██╗███╗   ██╗███████╗████████╗ █████╗ ███╗   ██╗ ██████╗███████╗███████╗{RESET}",
+        f"{PURPLE}  ██║████╗  ██║██╔════╝╚══██╔══╝██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝{RESET}",
+        f"{PURPLE}  ██║██╔██╗ ██║███████╗   ██║   ███████║██╔██╗ ██║██║     █████╗  ███████╗{RESET}",
+        f"{PURPLE}  ██║██║╚██╗██║╚════██║   ██║   ██╔══██║██║╚██╗██║██║     ██╔══╝  ╚════██║{RESET}",
+        f"{PURPLE}  ██║██║ ╚████║███████║   ██║   ██║  ██║██║ ╚████║╚██████╗███████╗███████║{RESET}",
+        f"{PURPLE}  ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚══════╝╚══════╝{RESET}",
+    ]
 
-    lines.append(f"{margin}{PURPLE}{BOLD}FARM{RESET}")
+    div = "-" * width
+    lines = [""]
+    lines.extend(logo)
     lines.append("")
-    lines.append(f"{margin}{BOLD}\U0001f4c1{RESET}  {DATA_DIR}")
-    parts = []
-    if total > 0:
-        parts.append(f"{total} printer{'s' if total > 1 else ''}")
-    parts.append(f"{running} active")
-    lines.append(f"{margin}\u26a1  {' \u00b7 '.join(parts)}")
-    lines.append("")
-    lines.append(f"{margin}{BOLD}PRINTERS{RESET}")
-    lines.append("")
+    info = f"\U0001f4c1 {DATA_DIR}"
+    if total > 0 or running > 0:
+        parts = []
+        if total > 0:
+            parts.append(f"{total} printer{'s' if total > 1 else ''}")
+        parts.append(f"{running} active")
+        info += f"    \u26a1 {' \u00b7 '.join(parts)}"
+    lines.append(info)
     if has_any:
+        lines.append(div)
+        lines.append("")
         lines.extend(grid_lines)
-        lines.append("")
         if url_lines:
-            lines.append(f"{margin}{GREEN}\U0001f517  Running{RESET}")
-            lines.extend(url_lines)
             lines.append("")
+            lines.append(f"\U0001f517  Running")
+            lines.extend(url_lines)
     else:
-        lines.append(f"{margin}\U0001f4a1  First time?  Type {GREEN}p{RESET} then add")
+        lines.append(div)
         lines.append("")
-
-    lines.append(f"{margin}{BOLD}GENERAL{RESET}")
+        lines.append(f"\U0001f4a1  First time?  Type {LAVENDER}p{RESET} then add")
     lines.append("")
-    lines.append(f"{margin}{GREEN}[p]{RESET}  printers    {GREEN}[d]{RESET}  detect")
-    lines.append(f"{margin}{GREEN}[s]{RESET}  setdir      {GREEN}[h]{RESET}  help")
-    lines.append(f"{margin}{GREEN}[q]{RESET}  quit")
+    lines.append(div)
     lines.append("")
-    lines.append(f"{margin}{BOLD}INSTANCES{RESET}")
+    L = lambda s: f"{LAVENDER}{s}{RESET}"
+    lines.append(f"{L('p')}  add printer             {L('d')}  detect USB")
+    lines.append(f"{L('s')}  set directory           {L('h')}  help")
     lines.append("")
-    lines.append(f"{margin}{GREEN}[la]{RESET}  launch all          {GREEN}[sa]{RESET}  stop all")
-    lines.append(f"{margin}{GREEN}l-a1{RESET}  launch a1            {GREEN}s-a1{RESET}  stop a1")
-    lines.append(f"{margin}   l-a1:a3  launch range  |  l-a1:b2  launch rectangle")
+    lines.append(f"{L('sa')}  start all                {L('ka')}  kill all")
+    lines.append(f"{L('s-a1')}  start a1               {L('k-a1')}  kill a1")
+    lines.append(f"{L('n-a1')}  rename a1              {L('l-a1')}  relabel a1")
+    lines.append(f"{L('b-a1')}  assign board           {L('x-a1')}  remove a1")
     lines.append("")
-    lines.append(f"{margin}\U0001f4a1  Type a label or nickname to open its panel")
-    lines.append(f"{margin}     e.g.  {GREEN}a1{RESET}  or  {GREEN}cherry{RESET}")
-
+    lines.append(f"{L('x-a1:b2')}  remove instances in outlined area")
+    lines.append("")
+    lines.append(div)
+    lines.append(f"Type a label ({L('a1')}) or name")
+    lines.append(div)
+    lines.append(f"{L('q')}  quit app")
     return lines
 
 
 def render_status():
     os.system('clear')
-    lines = _build_content()
-    width = max(vis_width(line) for line in lines) + 4
-    print('\u250c' + '─' * (width - 2) + '\u2510')
-    for line in lines:
-        clean = strip_ansi(line)
-        pad = width - vis_width(line) - 3
-        if pad < 0:
-            pad = 0
-        print('\u2502 ' + line + ' ' * pad + '\u2502')
-    print('\u2514' + '─' * (width - 2) + '\u2518')
+    width = shutil.get_terminal_size().columns
+    for line in _build_content(width):
+        print(line)
 
 
 # ── Help menu ─────────────────────────────────────────────────────
 def _help_menu():
     os.system('clear')
-    lines = []
-    lines.append(f"  {BOLD}HELP  \u2014  FARM{RESET}")
+    w = shutil.get_terminal_size().columns
+    div = "-" * w
+    lines = [f"{LAVENDER}HELP{RESET}"]
     lines.append("")
-    lines.append(f"  {BOLD}General{RESET}")
-    lines.append(f"  {GREEN}p{RESET}            Printer management menu (add, status)")
-    lines.append(f"  {GREEN}d{RESET}            Rescan USB devices")
-    lines.append(f"  {GREEN}s{RESET}            Set data directory")
-    lines.append(f"  {GREEN}q{RESET}            Quit")
+    lines.append(f"{LAVENDER}General{RESET}")
+    lines.append(f"  {LAVENDER}p{RESET}     Add a new printer (opens wizard)")
+    lines.append(f"  {LAVENDER}d{RESET}     Rescan USB devices")
+    lines.append(f"  {LAVENDER}s{RESET}     Set data directory")
+    lines.append(f"  {LAVENDER}h{RESET}     Show this help")
+    lines.append(f"  {LAVENDER}q{RESET}     Quit")
     lines.append("")
-    lines.append(f"  {BOLD}Launch / Stop{RESET}")
-    lines.append(f"  {GREEN}la{RESET}           Launch all printers")
-    lines.append(f"  {GREEN}sa{RESET}           Stop all printers")
-    lines.append(f"  {GREEN}l-a1{RESET}         Launch printer a1")
-    lines.append(f"  {GREEN}l-a1:a3{RESET}      Launch a1 through a3 (range)")
-    lines.append(f"  {GREEN}l-a1:b2{RESET}      Launch rectangle a1 to b2")
-    lines.append(f"  {GREEN}l-cherry{RESET}     Launch by nickname")
-    lines.append(f"  {GREEN}l-a1:b2.cherry{RESET}  Union: rectangle + nickname")
-    lines.append(f"  {GREEN}s-a1{RESET}         Stop printer a1")
-    lines.append(f"  {GREEN}s-a1:a3{RESET}      Stop a1 through a3")
+    lines.append(f"{LAVENDER}Start / Stop{RESET}")
+    lines.append(f"  {LAVENDER}sa{RESET}     Start all printers")
+    lines.append(f"  {LAVENDER}ka{RESET}     Stop all printers")
+    lines.append(f"  {LAVENDER}s-a1{RESET}   Start printer a1")
+    lines.append(f"  {LAVENDER}s-a1:a3{RESET}  Start a1 through a3 (range)")
+    lines.append(f"  {LAVENDER}s-a1:b2{RESET}  Start rectangle a1 to b2")
+    lines.append(f"  {LAVENDER}s-cherry{RESET}  Start by name")
+    lines.append(f"  {LAVENDER}k-a1{RESET}   Stop printer a1")
+    lines.append(f"  {LAVENDER}k-a1:a3{RESET}  Stop a1 through a3")
     lines.append("")
-    lines.append(f"  {BOLD}Edit{RESET}")
-    lines.append(f"  {GREEN}a1{RESET}           Open a1's edit panel (rename/label/assign/remove)")
-    lines.append(f"  {GREEN}cherry{RESET}       Open cherry's edit panel")
+    lines.append(f"{LAVENDER}Edit (single instance only){RESET}")
+    lines.append(f"  {LAVENDER}n-a1{RESET}   Rename printer a1")
+    lines.append(f"  {LAVENDER}l-a1{RESET}   Relabel printer a1")
+    lines.append(f"  {LAVENDER}b-a1{RESET}   Assign serial board to a1")
+    lines.append(f"  {LAVENDER}x-a1{RESET}   Remove printer a1")
+    lines.append(f"  {LAVENDER}x-a1:b2{RESET}  Remove instances in outlined area")
     lines.append("")
-    lines.append(f"  \u2937  Only existing instances are affected")
-    lines.append(f"     (like cropping \u2014 l-a1:b99 won't error)")
-
-    width = max(vis_width(line) for line in lines) + 4
-    print('\u250c' + '─' * (width - 2) + '\u2510')
+    lines.append(f"{LAVENDER}Info{RESET}")
+    lines.append(f"  {LAVENDER}a1{RESET}     Show printer details (serial, ports, URL)")
+    lines.append(f"  {LAVENDER}cherry{RESET} Show printer by name")
+    lines.append("")
+    lines.append(div)
+    lines.append("Only existing instances are affected — like cropping, s-a1:b99 won't error")
     for line in lines:
-        pad = width - vis_width(line) - 3
-        if pad < 0:
-            pad = 0
-        print('\u2502 ' + line + ' ' * pad + '\u2502')
-    print('\u2514' + '─' * (width - 2) + '\u2518')
+        print(line)
     input("\nPress Enter...")
 
 
-# ── Printer edit menu ────────────────────────────────────────────
-def _printer_menu(inst):
-    while True:
-        os.system('clear')
-        state = "running" if process.is_running(inst.id) else "stopped"
-        icon = {"running": "\U0001f7e2", "stopped": "\u26aa", "error": "\U0001f534"}[state]
-        serial_short = os.path.basename(inst.serial)[:30] if inst.serial else "(none)"
-        p = _farm.ports(inst.id)
-
-        lines = []
-        lines.append(f"  {icon}  {BOLD}{inst.label}{RESET}")
-        lines.append("")
-        lines.append(f"  {BOLD}Name:{RESET}   {inst.name}")
-        lines.append(f"  {BOLD}Serial:{RESET} {serial_short}")
-        if state == "running":
-            lines.append(f"  {GREEN}URL:{RESET}    http://localhost:{p['mainsail']}{RESET}")
-        else:
-            lines.append(f"  {BOLD}Ports:{RESET}  Moonraker:{p['moonraker']}  Mainsail:{p['mainsail']}")
-        lines.append("")
-        lines.append(f"  {GREEN}[r]{RESET}  rename    {GREEN}[l]{RESET}  relabel")
-        lines.append(f"  {GREEN}[a]{RESET}  assign    {GREEN}[x]{RESET}  remove")
-        lines.append(f"  {GREEN}[/]{RESET}  back")
-
-        width = max(vis_width(line) for line in lines) + 4
-        print('\u250c' + '─' * (width - 2) + '\u2510')
-        for line in lines:
-            pad = width - vis_width(line) - 3
-            if pad < 0:
-                pad = 0
-            print('\u2502 ' + line + ' ' * pad + '\u2502')
-        print('\u2514' + '─' * (width - 2) + '\u2518')
-
-        raw = input("> ").strip().lower()
-        if not raw:
-            continue
-        if raw in ("back", "/"):
-            break
-        elif raw in ("r", "rename"):
-            name = input("New name: ").strip()
-            if name:
-                cmd_rename(inst.id, name)
-                inst = _farm._get(inst.id)
-        elif raw in ("l", "label"):
-            label = input("New label (letters + digits, e.g. b18): ").strip().lower()
-            if label:
-                cmd_label(inst.id, label)
-                inst = _farm._get(inst.id)
-        elif raw in ("a", "assign"):
-            cmd_assign(inst.id)
-        elif raw in ("x", "remove"):
-            cmd_remove(inst.id)
-            try:
-                _farm._get(inst.id)
-            except KeyError:
-                break
-        input("Press Enter...")
+# ── Printer info (inline, no sub-page) ───────────────────────────
+def cmd_info(inst):
+    state = "running" if process.is_running(inst.id) else "stopped"
+    icon = {"running": "\U0001f7e2", "stopped": "\u26aa"}[state]
+    serial_short = os.path.basename(inst.serial)[:30] if inst.serial else "(none)"
+    p = _farm.ports(inst.id)
+    print(f"  {icon}  {LAVENDER}{inst.label}{RESET}  \u2014  {inst.name}")
+    print(f"  Serial: {serial_short}")
+    if state == "running":
+        print(f"  URL:    http://localhost:{p['mainsail']}")
+    else:
+        print(f"  Ports:  Moonraker {p['moonraker']}  Mainsail {p['mainsail']}")
 
 
-# ── Printer management menu ──────────────────────────────────────
+# ── Printer wizard (add / status) ────────────────────────────────
 def _printers_menu():
     while True:
         os.system('clear')
-
-        lines = []
-        lines.append(f"  {BOLD}PRINTER MANAGEMENT{RESET}")
-        lines.append("")
-        lines.append(f"  {GREEN}[add]{RESET}     add a new printer")
-        lines.append(f"  {GREEN}[status]{RESET}  show instance table")
-        lines.append(f"  {GREEN}[/]{RESET}       back")
-
-        width = max(vis_width(line) for line in lines) + 4
-        print('\u250c' + '─' * (width - 2) + '\u2510')
-        for line in lines:
-            pad = width - vis_width(line) - 3
-            if pad < 0:
-                pad = 0
-            print('\u2502 ' + line + ' ' * pad + '\u2502')
-        print('\u2514' + '─' * (width - 2) + '\u2518')
+        w = shutil.get_terminal_size().columns
+        div = "-" * w
+        print(f"{LAVENDER}PRINTER WIZARD{RESET}")
+        print("")
+        print(f"{LAVENDER}add{RESET}     add a new printer")
+        print(f"{LAVENDER}status{RESET}  show instance table")
+        print(f"{LAVENDER}/{RESET}       back")
+        print(div)
 
         raw = input("> ").strip().lower()
         if not raw:
@@ -634,27 +608,75 @@ def main():
                 input("Press Enter...")
         elif raw in ("h", "help"):
             _help_menu()
-        elif raw == "la":
-            cmd_launch_all()
-            input("Press Enter...")
         elif raw == "sa":
-            cmd_stop_all()
+            cmd_start_all()
             input("Press Enter...")
-        elif raw.startswith("l-"):
-            targets = _parse_selectors(raw[2:])
-            _cmd_launch_targets(targets)
+        elif raw == "ka":
+            cmd_stop_all()
             input("Press Enter...")
         elif raw.startswith("s-"):
             targets = _parse_selectors(raw[2:])
+            _cmd_launch_targets(targets)
+            input("Press Enter...")
+        elif raw.startswith("k-"):
+            targets = _parse_selectors(raw[2:])
             _cmd_stop_targets(targets)
+            input("Press Enter...")
+        elif raw.startswith("n-"):
+            spec = raw[2:]
+            inst = _resolve_instance(spec)
+            if not inst:
+                print(f"Instance '{spec}' not found")
+            else:
+                new_name = input(f"New name for {inst.label} [{inst.name}]: ").strip()
+                if new_name:
+                    if _farm.name_exists(new_name) and _farm.find_by_name(new_name).id != inst.id:
+                        print(f"\u274c  Name '{new_name}' already exists")
+                    else:
+                        cmd_rename(inst.id, new_name)
+            input("Press Enter...")
+        elif raw.startswith("l-"):
+            spec = raw[2:]
+            inst = _resolve_instance(spec)
+            if not inst:
+                print(f"Instance '{spec}' not found")
+            else:
+                new_label = input(f"New label for {inst.name} [{inst.label}]: ").strip().lower()
+                if new_label:
+                    if _farm.label_exists(new_label) and _farm.find_by_label(new_label).id != inst.id:
+                        print(f"\u274c  Label '{new_label}' already exists")
+                    else:
+                        cmd_label(inst.id, new_label)
+            input("Press Enter...")
+        elif raw.startswith("b-"):
+            spec = raw[2:]
+            inst = _resolve_instance(spec)
+            if not inst:
+                print(f"Instance '{spec}' not found")
+            else:
+                cmd_assign(inst.id)
+            input("Press Enter...")
+        elif raw.startswith("x-"):
+            targets = _parse_selectors(raw[2:])
+            if not targets:
+                print("No matching instances found")
+            else:
+                names = ", ".join(f"{t.label} ({t.name})" for t in targets)
+                print(f"Remove: {names}")
+                if input("Type 'yes' to confirm: ").strip().lower() == "yes":
+                    for t in targets:
+                        if process.is_running(t.id):
+                            process.stop(t.id)
+                        _farm.remove(t.id)
+                        print(f"\u2705  Removed {t.label}")
             input("Press Enter...")
         else:
             inst = _resolve_instance(raw)
             if inst:
-                _printer_menu(inst)
+                cmd_info(inst)
             else:
                 print(f"Unknown command or printer '{raw}' not found")
-                input("Press Enter...")
+            input("Press Enter...")
 
 
 if __name__ == "__main__":
