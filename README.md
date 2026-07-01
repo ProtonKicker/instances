@@ -28,3 +28,6 @@ list out devices
 
 ###### launch
 launch mainsail server
+
+#### process snapshots
+<img width="1085" height="1055" alt="image" src="https://github.com/user-attachments/assets/180bc7e6-09d2-437b-ad9f-b1ca24ca80d0" />
