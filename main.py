@@ -157,18 +157,18 @@ def _pick_template():
         return ""
 
     print("\nKlipper config templates (first 30):")
-    for i, t in enumerate(templates[:30]):
+    for i, t in enumerate(templates[:30], 1):
         print(f"  [{i}] {t.relative_to(config_dir)}")
     if len(templates) > 30:
         print(f"  ... and {len(templates) - 30} more")
 
     print("  (or type part of a filename to search)")
-    choice = input(f"Select template [0-{min(29, len(templates) - 1)}]: ").strip()
+    choice = input(f"Select template [1-{min(30, len(templates))}]: ").strip()
     if not choice:
         return ""
 
     try:
-        idx = int(choice)
+        idx = int(choice) - 1
         if 0 <= idx < len(templates):
             return str(templates[idx])
     except ValueError:
@@ -179,10 +179,10 @@ def _pick_template():
         return str(matches[0])
     elif len(matches) > 1:
         print("Multiple matches:")
-        for i, m in enumerate(matches):
+        for i, m in enumerate(matches, 1):
             print(f"  [{i}] {m.relative_to(config_dir)}")
         try:
-            idx = int(input("Select: "))
+            idx = int(input("Select: ")) - 1
             if 0 <= idx < len(matches):
                 return str(matches[idx])
         except ValueError:
@@ -198,14 +198,14 @@ def _pick_device(available, prompt="Select device"):
         return ""
 
     print(f"\n{prompt}:")
-    for i, dev in enumerate(available):
+    for i, dev in enumerate(available, 1):
         print(f"  [{i}] {os.path.basename(dev)}")
     print("  (leave blank to skip)")
     choice = input("> ").strip()
     if not choice:
         return ""
     try:
-        idx = int(choice)
+        idx = int(choice) - 1
         if 0 <= idx < len(available):
             return available[idx]
     except ValueError:
@@ -381,6 +381,103 @@ def cmd_status():
     _render_table(process.status(_farm))
 
 
+def cmd_dashboard():
+    while True:
+        os.system('clear')
+        w = shutil.get_terminal_size().columns
+        div = "-" * w
+        dim_div = f"{DIM}{'-' * w}{RESET}"
+
+        total = len(_farm.instances) if _farm else 0
+        running = sum(1 for inst in (_farm.instances or []) if process.is_running(inst.id)) if _farm else 0
+
+        print("")
+        for line in _render_logo(w):
+            print(line)
+        print("")
+        info = f"\U0001f4c1 {DATA_DIR}"
+        parts = []
+        if total > 0:
+            parts.append(f"{total} instance{'s' if total > 1 else ''}")
+        parts.append(f"{running} running")
+        info += f"    \u26a1 {' \u00b7 '.join(parts)}"
+        print(info)
+        print(div)
+        print("")
+        print(f"  {LAVENDER}u{RESET}  update / rescan     {LAVENDER}/{RESET}  back")
+        print("")
+        print(div)
+        print("")
+
+        if total > 0:
+            rows = {}
+            uncategorized = []
+            for inst, state in process.status(_farm):
+                pl = _parse_label_range(inst.label)
+                if pl:
+                    letter, num = pl
+                    rows.setdefault(letter, []).append((num, inst, state))
+                else:
+                    uncategorized.append((inst, state))
+
+            sorted_rows = []
+            for letter in sorted(rows.keys()):
+                sorted_rows.append((letter, sorted(rows[letter], key=lambda x: x[0])))
+            if uncategorized:
+                sorted_rows.append(("_", sorted(uncategorized, key=lambda x: x[0].id)))
+
+            for ri, (letter, items) in enumerate(sorted_rows):
+                if ri > 0:
+                    print(f"{dim_div}")
+
+                for num, inst, state in items:
+                    icon = "\U0001f7e2" if state == "running" else "\u26aa"
+                    state_label = "running" if state == "running" else "stopped"
+                    if state == "running":
+                        p = _farm.ports(inst.id)
+                        print(f"  {inst.label}  {inst.name}     {icon} {state_label}     http://localhost:{p['mainsail']}")
+                    else:
+                        print(f"  {inst.label}  {inst.name}     {icon} {state_label}")
+                    if inst.serial:
+                        print(f"      board: {os.path.basename(inst.serial)[:35]}")
+                    else:
+                        print(f"      no board assigned")
+        else:
+            print("No instances configured.")
+
+        print("")
+        print(div)
+        print("")
+        print(f"{'USB Devices':^{w}}")
+        print("")
+        print(div)
+        print("")
+
+        devices = detect.scan()
+        if not devices:
+            print("No USB devices found.")
+        else:
+            for i, dev in enumerate(devices, 1):
+                owner = ""
+                for inst in (_farm.instances or []):
+                    if inst.serial == dev:
+                        owner = f"  \u2190 {inst.label}"
+                        break
+                if not owner:
+                    owner = "  \u2190 unassigned"
+                print(f"  {i:2}. {dev}{owner}")
+
+        print("")
+        print(f"\u2713  {len(devices)} device(s) found \u00b7 {running} running")
+        print(div)
+
+        raw = input("\n> ").strip().lower()
+        if not raw or raw in ("back", "/"):
+            break
+        elif raw == "u":
+            continue
+
+
 # ── Live resize helpers ─────────────────────────────────────────
 def _render_logo(width):
     if width >= 68:
@@ -517,7 +614,7 @@ def _build_content(width):
     lines.append("")
     L = lambda s: f"{LAVENDER}{s}{RESET}"
     if width >= 60:
-        lines.append(f"{L('p')}  add printer             {L('d')}  detect USB")
+        lines.append(f"{L('p')}  add printer             {L('d')}  dashboard")
         lines.append(f"{L('s')}  set directory           {L('h')}  help")
         lines.append("")
         lines.append(f"{L('sa')}  start all                {L('ka')}  kill all")
@@ -528,7 +625,7 @@ def _build_content(width):
         lines.append(f"{L('x-a1:b2')}  remove instances in outlined area")
     else:
         lines.append(f"{L('p')}          add printer")
-        lines.append(f"{L('d')}          detect USB")
+        lines.append(f"{L('d')}          dashboard")
         lines.append(f"{L('s')}          set directory")
         lines.append(f"{L('h')}          help")
         lines.append("")
@@ -567,7 +664,7 @@ def _help_menu():
     lines.append("")
     lines.append(f"{LAVENDER}General{RESET}")
     lines.append(f"  {LAVENDER}p{RESET}     Add a new printer (opens wizard)")
-    lines.append(f"  {LAVENDER}d{RESET}     Rescan USB devices")
+    lines.append(f"  {LAVENDER}d{RESET}     Dashboard (overview + USB scan)")
     lines.append(f"  {LAVENDER}s{RESET}     Set data directory")
     lines.append(f"  {LAVENDER}h{RESET}     Show this help")
     lines.append(f"  {LAVENDER}q{RESET}     Quit")
@@ -622,8 +719,22 @@ def _printers_menu():
         div = "-" * w
         print(f"{LAVENDER}PRINTER WIZARD{RESET}")
         print("")
+
+        grid_lines, url_lines, has_any = _grid_display()
+        if has_any:
+            for line in grid_lines:
+                print(line)
+            if url_lines:
+                print("")
+                print(f"\U0001f517  Running")
+                for line in url_lines:
+                    print(line)
+        else:
+            print("No instances configured.")
+        print("")
+        print(div)
+        print("")
         print(f"{LAVENDER}add{RESET}     add a new printer")
-        print(f"{LAVENDER}status{RESET}  show instance table")
         print(f"{LAVENDER}/{RESET}       back")
         print(div)
 
@@ -634,8 +745,6 @@ def _printers_menu():
             break
         elif raw == "add":
             cmd_add()
-        elif raw == "status":
-            cmd_status()
         input("Press Enter...")
 
 
@@ -675,9 +784,7 @@ def main():
         elif raw in ("p", "printers"):
             _printers_menu()
         elif raw in ("d", "detect"):
-            d = detect.scan()
-            print(f"\u2713  Scanned: {len(d)} device(s) found")
-            input("Press Enter...")
+            cmd_dashboard()
         elif raw in ("s", "setdir"):
             new = input("Enter new data directory path:\n> ").strip()
             if new:
