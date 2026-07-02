@@ -123,7 +123,7 @@ def _resolve_instance(identifier):
 
 def _parse_selectors(spec):
     targets = {}
-    parts = spec.split('.')
+    parts = spec.split('&')
     for part in parts:
         part = part.strip()
         if not part:
@@ -223,7 +223,7 @@ def cmd_add():
     default_name = f"Instance {_farm.next_id}"
     default_label = Farm.default_label(_farm.next_id)
 
-    name = input(f"Name [{default_name}]: ").strip()
+    name = input("Name (or press Enter for auto-generate): ").strip()
     if not name:
         name = default_name
     while _farm.name_exists(name):
@@ -240,7 +240,7 @@ def cmd_add():
             label = default_label
 
     inst = _farm.create(name=name, label=label, serial=device, template_path=template)
-    print(f"\u2705  Created Instance {inst.id} [{inst.label}]")
+    print(f"\u2705  Created {inst.label}  ({inst.name})")
 
 
 def cmd_remove(instance_id):
@@ -270,7 +270,7 @@ def cmd_rename(instance_id, name):
 def cmd_label(instance_id, label):
     try:
         _farm.relabel(instance_id, label)
-        print(f"\u2705  Instance {instance_id} labeled '{label}'")
+        print(f"\u2705  Relabeled to '{label}'")
     except KeyError:
         print(f"Instance {instance_id} not found")
 
@@ -297,18 +297,34 @@ def cmd_assign(instance_id):
 def cmd_launch(inst):
     if not inst.serial:
         print(f"{inst.name} ({inst.label}) has no serial device assigned")
-        return
+        return False
     if not process.check_serial_access(inst.serial):
         print(f"Cannot access serial: {inst.serial}")
         print("Try: newgrp uucp")
-        return
+        return False
     if process.start(_farm, inst):
+        import time
+        time.sleep(0.5)
+        if not process.is_running(inst.id):
+            log_path = f"/tmp/klippy_{inst.id}.log"
+            try:
+                with open(log_path) as f:
+                    tail = f.read().strip().splitlines()[-5:]
+                for line in tail:
+                    print(f"   {line}")
+            except OSError:
+                pass
+            print(f"\u274c  {inst.name} ({inst.label}) crashed immediately")
+            process.stop(inst.id)
+            return False
         p = _farm.ports(inst.id)
         print(f"\u2705  {inst.name} ({inst.label}) launched")
         print(f"   Moonraker: http://localhost:{p['moonraker']}")
         print(f"   Mainsail:  http://localhost:{p['mainsail']}")
+        return True
     else:
         print(f"{inst.name} is already running")
+        return True
 
 
 def cmd_stop(inst):
@@ -319,13 +335,12 @@ def cmd_stop(inst):
 def cmd_start_all():
     started = 0
     for inst in _farm.instances:
-        if inst.serial and not process.is_running(inst.id):
-            cmd_launch(inst)
+        if inst.serial and not process.is_running(inst.id) and cmd_launch(inst):
             started += 1
-    if started == 0:
-        print("All instances are already running")
-    else:
+    if started:
         print(f"\u2705  {started}/{len(_farm.instances)} instances started")
+    else:
+        print("All instances are already running or failed to start")
 
 
 def cmd_stop_all():
@@ -431,17 +446,18 @@ def cmd_dashboard():
                     print(f"{dim_div}")
 
                 for num, inst, state in items:
-                    icon = "\U0001f7e2" if state == "running" else "\u26aa"
-                    state_label = "running" if state == "running" else "stopped"
+                    icon = {"running": "\U0001f7e2", "error": "\U0001f534", "stopped": "\u26aa"}[state]
+                    state_label = state
+                    print(f"  {inst.label}  {inst.name}")
+                    print(f"     {icon} {state_label}")
                     if state == "running":
                         p = _farm.ports(inst.id)
-                        print(f"  {inst.label}  {inst.name}     {icon} {state_label}     http://localhost:{p['mainsail']}")
-                    else:
-                        print(f"  {inst.label}  {inst.name}     {icon} {state_label}")
+                        print(f"     http://localhost:{p['mainsail']}")
                     if inst.serial:
-                        print(f"      board: {os.path.basename(inst.serial)[:35]}")
+                        print(f"     board: {os.path.basename(inst.serial)}")
                     else:
-                        print(f"      no board assigned")
+                        print(f"     no board assigned")
+                    print("")
         else:
             print("No instances configured.")
 
@@ -568,12 +584,12 @@ def _grid_display():
         items = sorted(rows[letter], key=lambda x: x[0])
         cells = []
         for num, inst, state in items:
-            icon = "\U0001f7e2" if state == "running" else "\u26aa"
+            icon = {"running": "\U0001f7e2", "error": "\U0001f534", "stopped": "\u26aa"}[state]
             cells.append(f"{inst.label} {icon}")
         grid_lines.append("  " + "  ".join(cells))
 
     for inst, state in uncategorized:
-        icon = "\U0001f7e2" if state == "running" else "\u26aa"
+        icon = {"running": "\U0001f7e2", "error": "\U0001f534", "stopped": "\u26aa"}[state]
         grid_lines.append(f"  {inst.label} {icon}")
 
     return grid_lines, url_lines, True
@@ -584,6 +600,9 @@ def _build_content(width):
     running = sum(1 for inst in (_farm.instances or []) if process.is_running(inst.id)) if _farm else 0
 
     grid_lines, url_lines, has_any = _grid_display()
+
+    def l(s, w=30):
+        return s + ' ' * (w - vis_width(s))
 
     div = "-" * width
     lines = [""]
@@ -608,21 +627,23 @@ def _build_content(width):
     else:
         lines.append(div)
         lines.append("")
-        lines.append(f"\U0001f4a1  First time?  Type {LAVENDER}p{RESET} then add")
+        lines.append(f"\U0001f4a1  Want to add a printer?  Type {LAVENDER}p{RESET}")
     lines.append("")
     lines.append(div)
     lines.append("")
     L = lambda s: f"{LAVENDER}{s}{RESET}"
     if width >= 60:
-        lines.append(f"{L('p')}  add printer             {L('d')}  dashboard")
-        lines.append(f"{L('s')}  set directory           {L('h')}  help")
+        lines.append(l(f"{L('p')}  add printer") + f"{L('d')}  dashboard")
+        lines.append(l(f"{L('s')}  set directory") + f"{L('h')}  help")
         lines.append("")
-        lines.append(f"{L('sa')}  start all                {L('ka')}  kill all")
-        lines.append(f"{L('s-a1')}  start a1               {L('k-a1')}  kill a1")
-        lines.append(f"{L('n-a1')}  rename a1              {L('l-a1')}  relabel a1")
-        lines.append(f"{L('b-a1')}  assign board           {L('x-a1')}  remove a1")
+        lines.append(l(f"{L('sa')}  start all") + f"{L('ka')}  kill all")
+        lines.append(l(f"{L('s-')}  start") + f"{L('k-')}  kill")
+        lines.append(l(f"{L('n-')}  rename") + f"{L('l-')}  relabel")
+        lines.append(l(f"{L('b-')}  assign board") + f"{L('x-')}  remove")
         lines.append("")
-        lines.append(f"{L('x-a1:b2')}  remove instances in outlined area")
+        lines.append(l(f"{L(':')}   range selector") + f"{L('&')}   and selector")
+        lines.append("")
+        lines.append(f"For syntax details, type {L('h')}")
     else:
         lines.append(f"{L('p')}          add printer")
         lines.append(f"{L('d')}          dashboard")
@@ -632,17 +653,20 @@ def _build_content(width):
         lines.append(f"{L('sa')}         start all")
         lines.append(f"{L('ka')}         kill all")
         lines.append("")
-        lines.append(f"{L('s-a1')}       start a1")
-        lines.append(f"{L('k-a1')}       kill a1")
-        lines.append(f"{L('n-a1')}       rename a1")
-        lines.append(f"{L('l-a1')}       relabel a1")
-        lines.append(f"{L('b-a1')}       assign board")
-        lines.append(f"{L('x-a1')}       remove a1")
+        lines.append(f"{L('s-')}         start")
+        lines.append(f"{L('k-')}         kill")
+        lines.append(f"{L('n-')}         rename")
+        lines.append(f"{L('l-')}         relabel")
+        lines.append(f"{L('b-')}         assign board")
+        lines.append(f"{L('x-')}         remove")
         lines.append("")
-        lines.append(f"{L('x-a1:b2')}    remove instances in outlined area")
+        lines.append(f"{L(':')}          range selector")
+        lines.append(f"{L('&')}          and selector")
+        lines.append("")
+        lines.append(f"For syntax details, type {L('h')}")
     lines.append("")
     lines.append(div)
-    lines.append(f"Type a label ({L('a1')}) or name")
+    lines.append(f"Type a label or name to see device details")
     lines.append(div)
     lines.append(f"{L('q')}  quit app")
     return lines
@@ -701,14 +725,12 @@ def _help_menu():
 def cmd_info(inst):
     state = "running" if process.is_running(inst.id) else "stopped"
     icon = {"running": "\U0001f7e2", "stopped": "\u26aa"}[state]
-    serial_short = os.path.basename(inst.serial)[:30] if inst.serial else "(none)"
+    serial_short = os.path.basename(inst.serial) if inst.serial else "(none)"
     p = _farm.ports(inst.id)
     print(f"  {icon}  {LAVENDER}{inst.label}{RESET}  \u2014  {inst.name}")
     print(f"  Serial: {serial_short}")
     if state == "running":
         print(f"  URL:    http://localhost:{p['mainsail']}")
-    else:
-        print(f"  Ports:  Moonraker {p['moonraker']}  Mainsail {p['mainsail']}")
 
 
 # ── Printer wizard (add / status) ────────────────────────────────
@@ -739,9 +761,8 @@ def _printers_menu():
         print(div)
 
         raw = input("> ").strip().lower()
-        if not raw:
-            continue
-        if raw in ("back", "/"):
+        if not raw or raw in ("back", "/"):
+            break
             break
         elif raw == "add":
             cmd_add()
@@ -836,7 +857,7 @@ def main():
             if not inst:
                 print(f"Instance '{spec}' not found")
             else:
-                new_label = input(f"New label for {inst.name} [{inst.label}]: ").strip().lower()
+                new_label = input(f"New label for {inst.label} ({inst.name}): ").strip().lower()
                 if new_label:
                     if _farm.label_exists(new_label) and _farm.find_by_label(new_label).id != inst.id:
                         print(f"\u274c  Label '{new_label}' already exists")
@@ -866,11 +887,12 @@ def main():
                         print(f"\u2705  Removed {t.label}")
             input("Press Enter...")
         else:
-            inst = _resolve_instance(raw)
-            if inst:
-                cmd_info(inst)
-            else:
+            targets = _parse_selectors(raw)
+            if not targets:
                 print(f"Unknown command or printer '{raw}' not found")
+            else:
+                for inst in targets:
+                    cmd_info(inst)
             input("Press Enter...")
 
 

@@ -146,15 +146,20 @@ class Farm:
         cfg = self.printer_cfg(inst.id)
         lines = cfg.read_text().splitlines()
         in_mcu = False
+        found_serial = False
         for i, line in enumerate(lines):
             s = line.strip()
             if s == "[mcu]":
                 in_mcu = True
             elif in_mcu and s.startswith("serial:"):
                 lines[i] = f"serial: {device_path}"
+                found_serial = True
                 break
             elif in_mcu and s.startswith("["):
                 break
+        if not found_serial:
+            lines.append("[mcu]")
+            lines.append(f"serial: {device_path}")
         cfg.write_text("\n".join(lines) + "\n")
 
     def _write_moonraker_conf(self, inst):

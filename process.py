@@ -17,9 +17,13 @@ def _python():
 
 def start(farm, inst):
     if inst.id in _running:
-        return False
+        k = _running[inst.id].get("klipper")
+        if k and k.poll() is None:
+            return False
+        del _running[inst.id]
 
     p = farm.ports(inst.id)
+    os.makedirs("/tmp/instances", exist_ok=True)
     klipper_py = os.path.join(BASE_DIR, "klipper_core", "klippy", "klippy.py")
     klipper_cwd = os.path.join(BASE_DIR, "klipper_core", "klippy")
     moonraker_py = os.path.join(BASE_DIR, "moonraker_core", "moonraker", "moonraker.py")
@@ -40,7 +44,7 @@ def start(farm, inst):
 
     kproc = subprocess.Popen(
         [py, klipper_py, "-a", p["uds"], printer_cfg],
-        cwd=klipper_cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=klipper_cwd, stdout=subprocess.DEVNULL, stderr=open(f"/tmp/klippy_{inst.id}.log", 'w'),
     )
     mproc = subprocess.Popen(
         [py, moonraker_py, "-c", moonraker_conf, "-d", moonraker_data],
